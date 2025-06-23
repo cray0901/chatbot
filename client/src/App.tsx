@@ -6,10 +6,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/useAuth";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
+import Login from "@/pages/login";
+import Register from "@/pages/register";
+import Admin from "@/pages/admin";
 import Chat from "@/pages/chat";
 
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -21,12 +24,16 @@ function Router() {
 
   return (
     <Switch>
+      <Route path="/login" component={Login} />
+      <Route path="/register" component={Register} />
+      
       {!isAuthenticated ? (
         <Route path="/" component={Landing} />
       ) : (
         <>
           <Route path="/" component={Chat} />
           <Route path="/chat/:id?" component={Chat} />
+          {user?.isAdmin && <Route path="/admin" component={Admin} />}
         </>
       )}
       <Route component={NotFound} />

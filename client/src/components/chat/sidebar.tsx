@@ -18,6 +18,7 @@ import {
   LogOut,
   X
 } from "lucide-react";
+import { Link } from "wouter";
 import type { User, Conversation } from "@shared/schema";
 
 interface SidebarProps {
@@ -122,6 +123,14 @@ export default function Sidebar({
                 <Settings className="h-4 w-4 mr-2" />
                 Settings
               </DropdownMenuItem>
+              {user.isAdmin && (
+                <DropdownMenuItem asChild>
+                  <Link href="/admin">
+                    <Settings className="h-4 w-4 mr-2" />
+                    Admin Panel
+                  </Link>
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={onLogout}>
                 <LogOut className="h-4 w-4 mr-2" />
                 Logout

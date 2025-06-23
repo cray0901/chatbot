@@ -1,11 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MessageSquare, Upload, Brain, History } from "lucide-react";
+import { Link } from "wouter";
 
 export default function Landing() {
-  const handleLogin = () => {
-    window.location.href = "/api/login";
-  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -16,9 +14,11 @@ export default function Landing() {
             <MessageSquare className="h-8 w-8 text-primary" />
             <h1 className="text-2xl font-bold text-foreground">AI Assistant</h1>
           </div>
-          <Button onClick={handleLogin}>
-            Sign In
-          </Button>
+          <Link href="/login">
+            <Button>
+              Sign In
+            </Button>
+          </Link>
         </div>
       </header>
 
@@ -31,9 +31,11 @@ export default function Landing() {
           <p className="text-xl text-muted-foreground mb-8">
             Chat with AI, upload documents and images for analysis, and keep track of your conversation history - all in one powerful interface.
           </p>
-          <Button size="lg" onClick={handleLogin} className="text-lg px-8 py-3">
-            Get Started
-          </Button>
+          <Link href="/login">
+            <Button size="lg" className="text-lg px-8 py-3">
+              Get Started
+            </Button>
+          </Link>
         </div>
       </section>
 

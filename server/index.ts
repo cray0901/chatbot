@@ -38,9 +38,9 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  // Initialize SQL Server database and create tables
-  const { createTables } = await import("./db");
-  await createTables();
+  // Initialize PostgreSQL database
+  const { initializeDatabase } = await import("./db");
+  await initializeDatabase();
   
   const server = await registerRoutes(app);
 

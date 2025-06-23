@@ -1,8 +1,8 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
-import { insertConversationSchema, insertMessageSchema } from "@shared/schema";
+import { setupAuthRoutes, isAuthenticated, isAdmin } from "./auth";
+import { insertConversationSchema, insertMessageSchema, insertAdminConfigSchema } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from 'openai';
 import multer from 'multer';
@@ -87,25 +87,13 @@ async function processDocument(filePath: string, mimeType: string): Promise<stri
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
-
-  // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-      res.json(user);
-    } catch (error) {
-      console.error("Error fetching user:", error);
-      res.status(500).json({ message: "Failed to fetch user" });
-    }
-  });
+  // Setup authentication routes and middleware
+  setupAuthRoutes(app);
 
   // Conversation routes
   app.get('/api/conversations', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       const conversations = await storage.getUserConversations(userId);
       res.json(conversations);
     } catch (error) {
@@ -116,7 +104,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/conversations', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       const validatedData = insertConversationSchema.parse({
         ...req.body,
         userId,
@@ -132,7 +120,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get('/api/conversations/:id', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       const conversationId = parseInt(req.params.id);
       
       const conversation = await storage.getConversation(conversationId, userId);
@@ -149,7 +137,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete('/api/conversations/:id', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       const conversationId = parseInt(req.params.id);
       
       await storage.deleteConversation(conversationId, userId);
@@ -163,7 +151,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Message routes
   app.get('/api/conversations/:id/messages', isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       const conversationId = parseInt(req.params.id);
       
       // Verify user owns the conversation
@@ -182,7 +170,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/conversations/:id/messages', isAuthenticated, upload.array('files'), async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       const conversationId = parseInt(req.params.id);
       
       // Verify user owns the conversation
@@ -428,6 +416,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         attachments: null,
       });
 
+      // Update user token usage (estimate based on response length)
+      try {
+        const user = req.user as any;
+        if (user && user.id) {
+          // Rough token estimation: ~4 chars per token for English text
+          const estimatedTokens = Math.ceil((content.length + aiContent.length) / 4);
+          await storage.updateUserTokenUsage(user.id, estimatedTokens);
+        }
+      } catch (error) {
+        console.error("Error updating token usage:", error);
+      }
+
+      // Auto-generate conversation title from first message if needed
+      if (conversation.title === 'New Conversation' || conversation.title === 'New Chat') {
+        try {
+          // Use the first few words of the user's message as title
+          const words = content.split(' ').slice(0, 6).join(' ');
+          const newTitle = words.length > 50 ? words.substring(0, 47) + '...' : words;
+          await storage.updateConversation(conversationId, { title: newTitle });
+        } catch (error) {
+          console.error("Error updating conversation title:", error);
+        }
+      }
+
       // Update conversation timestamp
       await storage.updateConversation(conversationId, {});
 
@@ -446,6 +458,131 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error processing message:", error);
       res.status(500).json({ message: "Failed to process message" });
+    }
+  });
+
+  // Admin routes
+  app.get('/api/admin/config', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const config = await storage.getAdminConfig();
+      if (!config) {
+        return res.json({
+          id: null,
+          apiProvider: 'openai',
+          apiKey: '',
+          apiEndpoint: '',
+          modelName: 'gpt-4',
+          defaultTokenQuota: 10000,
+          isActive: false,
+        });
+      }
+      
+      // Don't expose the actual API key
+      res.json({
+        ...config,
+        apiKey: config.apiKey ? '***hidden***' : '',
+      });
+    } catch (error) {
+      console.error("Error fetching admin config:", error);
+      res.status(500).json({ message: "Failed to fetch admin configuration" });
+    }
+  });
+
+  app.post('/api/admin/config', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const validatedData = insertAdminConfigSchema.parse(req.body);
+      const config = await storage.updateAdminConfig(validatedData);
+      
+      // Don't expose the actual API key in response
+      res.json({
+        ...config,
+        apiKey: config.apiKey ? '***hidden***' : '',
+      });
+    } catch (error) {
+      console.error("Error updating admin config:", error);
+      res.status(400).json({ message: "Failed to update admin configuration" });
+    }
+  });
+
+  app.get('/api/admin/users', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const users = await storage.getAllUsers();
+      // Don't expose passwords or sensitive tokens
+      const sanitizedUsers = users.map(user => ({
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isActive: user.isActive,
+        isAdmin: user.isAdmin,
+        tokenQuota: user.tokenQuota,
+        tokenUsed: user.tokenUsed,
+        emailVerified: user.emailVerified,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      }));
+      res.json(sanitizedUsers);
+    } catch (error) {
+      console.error("Error fetching users:", error);
+      res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  app.patch('/api/admin/users/:id/status', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const { isActive } = req.body;
+      
+      if (typeof isActive !== 'boolean') {
+        return res.status(400).json({ message: "isActive must be a boolean" });
+      }
+      
+      const user = await storage.toggleUserStatus(userId, isActive);
+      res.json({
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isActive: user.isActive,
+        isAdmin: user.isAdmin,
+        tokenQuota: user.tokenQuota,
+        tokenUsed: user.tokenUsed,
+        emailVerified: user.emailVerified,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      });
+    } catch (error) {
+      console.error("Error updating user status:", error);
+      res.status(500).json({ message: "Failed to update user status" });
+    }
+  });
+
+  app.patch('/api/admin/users/:id/quota', isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const { tokenQuota } = req.body;
+      
+      if (!Number.isInteger(tokenQuota) || tokenQuota < 0) {
+        return res.status(400).json({ message: "tokenQuota must be a non-negative integer" });
+      }
+      
+      const user = await storage.updateUserQuota(userId, tokenQuota);
+      res.json({
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isActive: user.isActive,
+        isAdmin: user.isAdmin,
+        tokenQuota: user.tokenQuota,
+        tokenUsed: user.tokenUsed,
+        emailVerified: user.emailVerified,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      });
+    } catch (error) {
+      console.error("Error updating user quota:", error);
+      res.status(500).json({ message: "Failed to update user quota" });
     }
   });
 

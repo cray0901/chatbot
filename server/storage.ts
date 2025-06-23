@@ -1,19 +1,33 @@
 import {
+  users,
+  conversations,
+  messages,
+  adminConfig,
   type User,
   type UpsertUser,
   type Conversation,
   type InsertConversation,
   type Message,
   type InsertMessage,
+  type AdminConfig,
+  type InsertAdminConfig,
+  type RegisterUser,
 } from "@shared/schema";
-import { db, initializeDatabase } from "./db";
+import { db } from "./db";
+import { eq, and, sql } from "drizzle-orm";
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
+import { getCurrentHKTime } from "./timezone";
 
 // Interface for storage operations
 export interface IStorage {
   // User operations
-  // (IMPORTANT) these user operations are mandatory for Replit Auth.
   getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
+  createUser(user: RegisterUser): Promise<User>;
+  updateUser(id: string, updates: Partial<User>): Promise<User>;
+  verifyPassword(email: string, password: string): Promise<User | null>;
   
   // Conversation operations
   getUserConversations(userId: string): Promise<Conversation[]>;
@@ -26,153 +40,196 @@ export interface IStorage {
   getConversationMessages(conversationId: number): Promise<Message[]>;
   addMessage(message: InsertMessage): Promise<Message>;
   deleteMessage(id: number): Promise<void>;
+  
+  // Admin operations
+  getAdminConfig(): Promise<AdminConfig | undefined>;
+  updateAdminConfig(config: InsertAdminConfig): Promise<AdminConfig>;
+  getAllUsers(): Promise<User[]>;
+  toggleUserStatus(userId: string, isActive: boolean): Promise<User>;
+  updateUserQuota(userId: string, quota: number): Promise<User>;
+  updateUserTokenUsage(userId: string, tokensUsed: number): Promise<User>;
 }
 
 export class DatabaseStorage implements IStorage {
   // User operations
   async getUser(id: string): Promise<User | undefined> {
-    const stmt = db.prepare('SELECT * FROM users WHERE id = ?');
-    return stmt.get(id) as User | undefined;
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
-    // First try to update
-    const updateStmt = db.prepare(`
-      UPDATE users 
-      SET email = ?, firstName = ?, lastName = ?, profileImageUrl = ?, updatedAt = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
+    const [user] = await db
+      .insert(users)
+      .values(userData)
+      .onConflictDoUpdate({
+        target: users.id,
+        set: {
+          ...userData,
+          updatedAt: getCurrentHKTime(),
+        },
+      })
+      .returning();
+    return user;
+  }
+
+  async createUser(userData: RegisterUser): Promise<User> {
+    const hashedPassword = await bcrypt.hash(userData.password, 10);
+    const userId = crypto.randomUUID();
+    const verificationToken = crypto.randomBytes(32).toString('hex');
     
-    const updateResult = updateStmt.run(
-      userData.email,
-      userData.firstName,
-      userData.lastName,
-      userData.profileImageUrl,
-      userData.id
-    );
+    const [user] = await db
+      .insert(users)
+      .values({
+        id: userId,
+        email: userData.email,
+        password: hashedPassword,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        verificationToken,
+        emailVerified: false,
+        isActive: false, // Require email verification
+      })
+      .returning();
+    return user;
+  }
 
-    if (updateResult.changes === 0) {
-      // Insert if update didn't affect any rows
-      const insertStmt = db.prepare(`
-        INSERT INTO users (id, email, firstName, lastName, profileImageUrl, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `);
-      
-      insertStmt.run(
-        userData.id,
-        userData.email,
-        userData.firstName,
-        userData.lastName,
-        userData.profileImageUrl
-      );
-    }
+  async updateUser(id: string, updates: Partial<User>): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return user;
+  }
 
-    // Return the user
-    const selectStmt = db.prepare('SELECT * FROM users WHERE id = ?');
-    return selectStmt.get(userData.id) as User;
+  async verifyPassword(email: string, password: string): Promise<User | null> {
+    const user = await this.getUserByEmail(email);
+    if (!user || !user.password) return null;
+    
+    const isValid = await bcrypt.compare(password, user.password);
+    return isValid ? user : null;
   }
 
   // Conversation operations
   async getUserConversations(userId: string): Promise<Conversation[]> {
-    const stmt = db.prepare(`
-      SELECT * FROM conversations 
-      WHERE userId = ? 
-      ORDER BY updatedAt DESC
-    `);
-    return stmt.all(userId) as Conversation[];
+    return await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.userId, userId))
+      .orderBy(conversations.updatedAt);
   }
 
   async getConversation(id: number, userId: string): Promise<Conversation | undefined> {
-    const stmt = db.prepare(`
-      SELECT * FROM conversations 
-      WHERE id = ? AND userId = ?
-    `);
-    return stmt.get(id, userId) as Conversation | undefined;
+    const [conversation] = await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.id, id), eq(conversations.userId, userId)));
+    return conversation;
   }
 
   async createConversation(conversation: InsertConversation): Promise<Conversation> {
-    const stmt = db.prepare(`
-      INSERT INTO conversations (userId, title, createdAt, updatedAt)
-      VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `);
-    
-    const result = stmt.run(conversation.userId, conversation.title);
-    
-    const selectStmt = db.prepare('SELECT * FROM conversations WHERE id = ?');
-    return selectStmt.get(result.lastInsertRowid) as Conversation;
+    const [newConversation] = await db
+      .insert(conversations)
+      .values(conversation)
+      .returning();
+    return newConversation;
   }
 
   async updateConversation(id: number, updates: Partial<InsertConversation>): Promise<Conversation> {
-    if (updates.title) {
-      const stmt = db.prepare(`
-        UPDATE conversations 
-        SET title = ?, updatedAt = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `);
-      stmt.run(updates.title, id);
-    } else {
-      const stmt = db.prepare(`
-        UPDATE conversations 
-        SET updatedAt = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `);
-      stmt.run(id);
-    }
-
-    const selectStmt = db.prepare('SELECT * FROM conversations WHERE id = ?');
-    return selectStmt.get(id) as Conversation;
+    const [conversation] = await db
+      .update(conversations)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(conversations.id, id))
+      .returning();
+    return conversation;
   }
 
   async deleteConversation(id: number, userId: string): Promise<void> {
-    const stmt = db.prepare(`
-      DELETE FROM conversations 
-      WHERE id = ? AND userId = ?
-    `);
-    stmt.run(id, userId);
+    await db
+      .delete(conversations)
+      .where(and(eq(conversations.id, id), eq(conversations.userId, userId)));
   }
 
   // Message operations
   async getConversationMessages(conversationId: number): Promise<Message[]> {
-    const stmt = db.prepare(`
-      SELECT * FROM messages 
-      WHERE conversationId = ? 
-      ORDER BY createdAt ASC
-    `);
-    
-    const messages = stmt.all(conversationId) as any[];
-    
-    // Parse JSON attachments
-    return messages.map(msg => ({
-      ...msg,
-      attachments: msg.attachments ? JSON.parse(msg.attachments) : null
-    }));
+    return await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(messages.createdAt);
   }
 
   async addMessage(message: InsertMessage): Promise<Message> {
-    const stmt = db.prepare(`
-      INSERT INTO messages (conversationId, content, role, attachments, createdAt)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `);
-    
-    const result = stmt.run(
-      message.conversationId,
-      message.content,
-      message.role,
-      message.attachments ? JSON.stringify(message.attachments) : null
-    );
-    
-    const selectStmt = db.prepare('SELECT * FROM messages WHERE id = ?');
-    const newMessage = selectStmt.get(result.lastInsertRowid) as any;
-    
-    return {
-      ...newMessage,
-      attachments: newMessage.attachments ? JSON.parse(newMessage.attachments) : null
-    };
+    const [newMessage] = await db
+      .insert(messages)
+      .values(message)
+      .returning();
+    return newMessage;
   }
 
   async deleteMessage(id: number): Promise<void> {
-    const stmt = db.prepare('DELETE FROM messages WHERE id = ?');
-    stmt.run(id);
+    await db.delete(messages).where(eq(messages.id, id));
+  }
+
+  // Admin operations
+  async getAdminConfig(): Promise<AdminConfig | undefined> {
+    const [config] = await db
+      .select()
+      .from(adminConfig)
+      .where(eq(adminConfig.isActive, true))
+      .limit(1);
+    return config;
+  }
+
+  async updateAdminConfig(configData: InsertAdminConfig): Promise<AdminConfig> {
+    // Deactivate all existing configs
+    await db.update(adminConfig).set({ isActive: false });
+    
+    // Insert new active config
+    const [config] = await db
+      .insert(adminConfig)
+      .values({ ...configData, isActive: true })
+      .returning();
+    return config;
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return await db.select().from(users).orderBy(users.createdAt);
+  }
+
+  async toggleUserStatus(userId: string, isActive: boolean): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ isActive, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
+  }
+
+  async updateUserQuota(userId: string, quota: number): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ tokenQuota: quota, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
+  }
+
+  async updateUserTokenUsage(userId: string, tokensUsed: number): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ 
+        tokenUsed: sql`${users.tokenUsed} + ${tokensUsed}`,
+        updatedAt: new Date() 
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
   }
 }
 
