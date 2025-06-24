@@ -19,6 +19,7 @@ import {
   X
 } from "lucide-react";
 import { Link } from "wouter";
+import ProfileModal from "@/components/profile-modal";
 import type { User, Conversation } from "@shared/schema";
 
 interface SidebarProps {
@@ -47,6 +48,32 @@ export default function Sidebar({
   isLoading,
 }: SidebarProps) {
   const [hoveredConversation, setHoveredConversation] = useState<number | null>(null);
+
+  const handleExport = async () => {
+    try {
+      const response = await fetch('/api/conversations/export', {
+        method: 'GET',
+        credentials: 'include',
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to export conversations');
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `conversations_export_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error('Export failed:', error);
+    }
+  };
 
   const getUserInitials = (user: User) => {
     if (user.firstName && user.lastName) {
@@ -119,10 +146,12 @@ export default function Sidebar({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem>
-                <Settings className="h-4 w-4 mr-2" />
-                Settings
-              </DropdownMenuItem>
+              <ProfileModal user={user}>
+                <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                  <Settings className="h-4 w-4 mr-2" />
+                  Profile Settings
+                </DropdownMenuItem>
+              </ProfileModal>
               {user.isAdmin && (
                 <DropdownMenuItem asChild>
                   <Link href="/admin">
@@ -216,7 +245,7 @@ export default function Sidebar({
       {/* Sidebar Footer */}
       <div className="p-4 border-t border-border">
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" className="flex-1">
+          <Button variant="ghost" size="sm" className="flex-1" onClick={handleExport}>
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>

@@ -103,8 +103,11 @@ export default function Chat() {
       });
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`${response.status}: ${text}`);
+        const errorData = await response.json().catch(() => ({ message: "Unknown error" }));
+        if (errorData.quotaExceeded) {
+          throw new Error(`QUOTA_EXCEEDED: ${errorData.message}`);
+        }
+        throw new Error(`${response.status}: ${errorData.message || "Unknown error"}`);
       }
 
       return response.json();
@@ -125,9 +128,19 @@ export default function Chat() {
         }, 500);
         return;
       }
+      
+      if (error.message.startsWith("QUOTA_EXCEEDED:")) {
+        toast({
+          title: "Token Quota Exceeded",
+          description: error.message.replace("QUOTA_EXCEEDED: ", ""),
+          variant: "destructive",
+        });
+        return;
+      }
+      
       toast({
-        title: "Error",
-        description: "Failed to send message",
+        title: "Error", 
+        description: error.message || "Failed to send message",
         variant: "destructive",
       });
     },
@@ -256,6 +269,7 @@ export default function Chat() {
   };
 
   const handleLogout = () => {
+    // Simple redirect to logout endpoint
     window.location.href = "/api/logout";
   };
 
