@@ -101,7 +101,7 @@ export class DatabaseStorage implements IStorage {
   async updateUser(id: string, updates: Partial<User>): Promise<User> {
     const [user] = await db
       .update(users)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...updates, updatedAt: new Date().toISOString() })
       .where(eq(users.id, id))
       .returning();
     return user;
@@ -143,7 +143,7 @@ export class DatabaseStorage implements IStorage {
   async updateConversation(id: number, updates: Partial<InsertConversation>): Promise<Conversation> {
     const [conversation] = await db
       .update(conversations)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...updates, updatedAt: new Date().toISOString() })
       .where(eq(conversations.id, id))
       .returning();
     return conversation;
@@ -205,7 +205,7 @@ export class DatabaseStorage implements IStorage {
   async toggleUserStatus(userId: string, isActive: boolean): Promise<User> {
     const [user] = await db
       .update(users)
-      .set({ isActive, updatedAt: new Date() })
+      .set({ isActive, updatedAt: new Date().toISOString() })
       .where(eq(users.id, userId))
       .returning();
     return user;
@@ -214,7 +214,7 @@ export class DatabaseStorage implements IStorage {
   async updateUserQuota(userId: string, quota: number): Promise<User> {
     const [user] = await db
       .update(users)
-      .set({ tokenQuota: quota, updatedAt: new Date() })
+      .set({ tokenQuota: quota, updatedAt: new Date().toISOString() })
       .where(eq(users.id, userId))
       .returning();
     return user;
@@ -225,7 +225,7 @@ export class DatabaseStorage implements IStorage {
       .update(users)
       .set({ 
         tokenUsed: sql`${users.tokenUsed} + ${tokensUsed}`,
-        updatedAt: new Date() 
+        updatedAt: new Date().toISOString()
       })
       .where(eq(users.id, userId))
       .returning();

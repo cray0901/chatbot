@@ -1,6 +1,7 @@
 import express from 'express';
 import session from 'express-session';
-import connectPg from 'connect-pg-simple';
+import SQLiteStore from 'better-sqlite3-session-store';
+import Database from 'better-sqlite3';
 import { storage } from './storage';
 import { emailService } from './email';
 import {
@@ -23,12 +24,17 @@ declare global {
 
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
-  const pgStore = connectPg(session);
-  const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
-    createTableIfMissing: true,
-    ttl: sessionTtl,
-    tableName: "sessions",
+  
+  // Use SQLite for session storage
+  const SqliteStore = SQLiteStore(session);
+  const db = new Database(process.env.DATABASE_PATH || 'chatbot.db');
+  
+  const sessionStore = new SqliteStore({
+    client: db,
+    expired: {
+      clear: true,
+      intervalMs: 15 * 60 * 1000 // 15 minutes
+    }
   });
   
   return session({
@@ -120,7 +126,19 @@ export function setupAuthRoutes(app: express.Application) {
       });
     } catch (error) {
       console.error('Registration error:', error);
-      res.status(400).json({ message: 'Registration failed' });
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: 'Validation failed', 
+          errors: error.errors 
+        });
+      }
+      if (error.message && error.message.includes('UNIQUE constraint failed')) {
+        return res.status(400).json({ message: 'User already exists' });
+      }
+      res.status(500).json({ 
+        message: 'Registration failed', 
+        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      });
     }
   });
 
@@ -159,7 +177,16 @@ export function setupAuthRoutes(app: express.Application) {
       });
     } catch (error) {
       console.error('Login error:', error);
-      res.status(400).json({ message: 'Login failed' });
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: 'Validation failed', 
+          errors: error.errors 
+        });
+      }
+      res.status(500).json({ 
+        message: 'Login failed', 
+        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      });
     }
   });
 

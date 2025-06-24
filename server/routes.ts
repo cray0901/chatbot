@@ -173,6 +173,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.id;
       const conversationId = parseInt(req.params.id);
       
+      // Check user's token quota before processing message
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      if (user.tokenUsed >= user.tokenQuota) {
+        return res.status(403).json({ 
+          message: "Token quota exceeded. You have used all your allocated tokens for this period. Please contact an administrator to increase your quota.",
+          quotaExceeded: true,
+          tokenUsed: user.tokenUsed,
+          tokenQuota: user.tokenQuota
+        });
+      }
+      
       // Verify user owns the conversation
       const conversation = await storage.getConversation(conversationId, userId);
       if (!conversation) {
@@ -583,6 +598,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating user quota:", error);
       res.status(500).json({ message: "Failed to update user quota" });
+    }
+  });
+
+  // Export conversations endpoint
+  app.get('/api/conversations/export', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      
+      // Get all user conversations with messages
+      const conversations = await storage.getUserConversations(userId);
+      const exportData = [];
+      
+      for (const conversation of conversations) {
+        if (!conversation.id || isNaN(conversation.id)) {
+          console.warn(`Skipping conversation with invalid ID: ${conversation.id}`);
+          continue;
+        }
+        const messages = await storage.getConversationMessages(conversation.id);
+        exportData.push({
+          id: conversation.id,
+          title: conversation.title,
+          createdAt: conversation.createdAt,
+          updatedAt: conversation.updatedAt,
+          messages: messages.map(msg => ({
+            id: msg.id,
+            content: msg.content,
+            role: msg.role,
+            attachments: msg.attachments,
+            createdAt: msg.createdAt
+          }))
+        });
+      }
+      
+      const exportJson = {
+        exportDate: new Date().toISOString(),
+        userId: userId,
+        conversationsCount: conversations.length,
+        conversations: exportData
+      };
+      
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="conversations_export_${new Date().toISOString().split('T')[0]}.json"`);
+      res.json(exportJson);
+    } catch (error) {
+      console.error("Error exporting conversations:", error);
+      res.status(500).json({ message: "Failed to export conversations" });
+    }
+  });
+
+  // Health check endpoint for debugging
+  app.get('/api/health', async (req, res) => {
+    try {
+      const dbPath = process.env.DATABASE_PATH || "chatbot.db";
+      const userCount = await storage.getAllUsers();
+      
+      res.json({
+        status: 'ok',
+        database: 'connected',
+        dbPath,
+        userCount: userCount.length,
+        environment: process.env.NODE_ENV || 'development',
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      res.status(500).json({
+        status: 'error',
+        database: 'disconnected',
+        error: error.message
+      });
     }
   });
 
