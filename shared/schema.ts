@@ -1,79 +1,74 @@
 import {
-  pgTable,
+  sqliteTable as table,
   text,
-  varchar,
-  timestamp,
-  jsonb,
-  index,
-  serial,
   integer,
-  boolean,
-  decimal,
-} from "drizzle-orm/pg-core";
+  real,
+  blob,
+  index,
+} from "drizzle-orm/sqlite-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // Session storage table.
 // (IMPORTANT) This table is mandatory for Replit Auth, don't drop it.
-export const sessions = pgTable(
+export const sessions = table(
   "sessions",
   {
-    sid: varchar("sid").primaryKey(),
-    sess: jsonb("sess").notNull(),
-    expire: timestamp("expire").notNull(),
+    sid: text("sid").primaryKey(),
+    sess: text("sess").notNull(), // JSON stored as text
+    expire: text("expire").notNull(), // ISO timestamp as text
   },
-  (table) => [index("IDX_session_expire").on(table.expire)],
 );
 
 // User storage table.
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().notNull(),
-  email: varchar("email").unique().notNull(),
-  password: varchar("password"), // For local auth, nullable for OAuth
-  firstName: varchar("first_name"),
-  lastName: varchar("last_name"),
-  profileImageUrl: varchar("profile_image_url"),
-  isActive: boolean("is_active").default(true),
-  isAdmin: boolean("is_admin").default(false),
+export const users = table("users", {
+  id: text("id").primaryKey().notNull(),
+  email: text("email").notNull(),
+  password: text("password"), // For local auth, nullable for OAuth
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  profileImageUrl: text("profile_image_url"),
+  isActive: integer("is_active", { mode: "boolean" }).default(true),
+  isAdmin: integer("is_admin", { mode: "boolean" }).default(false),
   tokenQuota: integer("token_quota").default(10000), // Monthly token limit
   tokenUsed: integer("token_used").default(0), // Current month usage
-  resetToken: varchar("reset_token"), // For password reset
-  resetTokenExpiry: timestamp("reset_token_expiry"),
-  emailVerified: boolean("email_verified").default(false),
-  verificationToken: varchar("verification_token"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+  resetToken: text("reset_token"), // For password reset
+  resetTokenExpiry: text("reset_token_expiry"), // ISO timestamp as text
+  emailVerified: integer("email_verified", { mode: "boolean" }).default(false),
+  verificationToken: text("verification_token"),
+  createdAt: text("created_at").default("CURRENT_TIMESTAMP"),
+  updatedAt: text("updated_at").default("CURRENT_TIMESTAMP"),
 });
 
 // Admin configuration table for API settings
-export const adminConfig = pgTable("admin_config", {
-  id: serial("id").primaryKey(),
-  apiProvider: varchar("api_provider").notNull().default("openai"), // openai, anthropic, etc
+export const adminConfig = table("admin_config", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  apiProvider: text("api_provider").notNull().default("openai"), // openai, anthropic, etc
   apiKey: text("api_key").notNull(),
   apiEndpoint: text("api_endpoint"),
-  modelName: varchar("model_name").notNull().default("gpt-4"),
+  modelName: text("model_name").notNull().default("gpt-4"),
   defaultTokenQuota: integer("default_token_quota").default(10000),
-  isActive: boolean("is_active").default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+  isActive: integer("is_active", { mode: "boolean" }).default(true),
+  createdAt: text("created_at").default("CURRENT_TIMESTAMP"),
+  updatedAt: text("updated_at").default("CURRENT_TIMESTAMP"),
 });
 
-export const conversations = pgTable("conversations", {
-  id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  title: varchar("title").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+export const conversations = table("conversations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  createdAt: text("created_at").default("CURRENT_TIMESTAMP"),
+  updatedAt: text("updated_at").default("CURRENT_TIMESTAMP"),
 });
 
-export const messages = pgTable("messages", {
-  id: serial("id").primaryKey(),
+export const messages = table("messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
   conversationId: integer("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
   content: text("content").notNull(),
-  role: varchar("role").notNull(), // 'user' or 'assistant'
-  attachments: jsonb("attachments"), // For file attachments
-  createdAt: timestamp("created_at").defaultNow(),
+  role: text("role").notNull(), // 'user' or 'assistant'
+  attachments: text("attachments"), // JSON stored as text
+  createdAt: text("created_at").default("CURRENT_TIMESTAMP"),
 });
 
 // Relations
@@ -119,21 +114,30 @@ export const insertAdminConfigSchema = createInsertSchema(adminConfig).omit({
   updatedAt: true,
 });
 
-// Auth schemas
+// Auth schemas with relaxed email validation for localhost
 export const registerSchema = z.object({
-  email: z.string().email(),
+  email: z.string().min(1).refine((email) => {
+    // Allow basic email format including localhost domains
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith('@localhost');
+  }, "Invalid email format"),
   password: z.string().min(8),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
 });
 
 export const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().min(1).refine((email) => {
+    // Allow basic email format including localhost domains
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith('@localhost');
+  }, "Invalid email format"),
   password: z.string().min(1),
 });
 
 export const resetPasswordSchema = z.object({
-  email: z.string().email(),
+  email: z.string().min(1).refine((email) => {
+    // Allow basic email format including localhost domains
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith('@localhost');
+  }, "Invalid email format"),
 });
 
 export const newPasswordSchema = z.object({
